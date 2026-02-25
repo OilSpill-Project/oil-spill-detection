@@ -18,7 +18,7 @@ val_loader = DataLoader(val_dataset, batch_size=1, shuffle=True)
 # Model
 model = AttentionUNetPlusPlus().to(device)
 model.load_state_dict(
-    torch.load("results/models/deeplabv3_plus.pth", map_location=device)
+    torch.load("results/models/attention_unet_pp_30.pth", map_location=device)
 )
 model.eval()
 
