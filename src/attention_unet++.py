@@ -62,9 +62,9 @@ class AttentionBlock(nn.Module):
 # -----------------------------------
 # Attention U-Net++
 # -----------------------------------
-class AttentionUNet++(nn.Module):
+class AttentionUNetPlusPlus(nn.Module):
     def __init__(self, in_channels=3, out_channels=1):
-        super(AttentionUNet++, self).__init__()
+        super(AttentionUNetPlusPlus, self).__init__()
 
         filters = [64, 128, 256, 512]
 
