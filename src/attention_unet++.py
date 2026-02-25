@@ -1,35 +1,30 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 
-# -----------------------------------
-# Convolution Block
-# -----------------------------------
-class ConvBlock(nn.Module):
+# -----------------------------
+# Double Convolution Block
+# -----------------------------
+class DoubleConv(nn.Module):
     def __init__(self, in_channels, out_channels):
-        super(ConvBlock, self).__init__()
-
+        super().__init__()
         self.block = nn.Sequential(
             nn.Conv2d(in_channels, out_channels, 3, padding=1),
-            nn.BatchNorm2d(out_channels),
             nn.ReLU(inplace=True),
-
             nn.Conv2d(out_channels, out_channels, 3, padding=1),
-            nn.BatchNorm2d(out_channels),
-            nn.ReLU(inplace=True),
+            nn.ReLU(inplace=True)
         )
 
     def forward(self, x):
         return self.block(x)
 
 
-# -----------------------------------
+# -----------------------------
 # Attention Gate
-# -----------------------------------
-class AttentionBlock(nn.Module):
+# -----------------------------
+class AttentionGate(nn.Module):
     def __init__(self, F_g, F_l, F_int):
-        super(AttentionBlock, self).__init__()
+        super().__init__()
 
         self.W_g = nn.Sequential(
             nn.Conv2d(F_g, F_int, kernel_size=1),
@@ -52,81 +47,74 @@ class AttentionBlock(nn.Module):
     def forward(self, g, x):
         g1 = self.W_g(g)
         x1 = self.W_x(x)
-
         psi = self.relu(g1 + x1)
         psi = self.psi(psi)
-
         return x * psi
 
 
-# -----------------------------------
+# -----------------------------
 # Attention U-Net++
-# -----------------------------------
+# -----------------------------
 class AttentionUNetPlusPlus(nn.Module):
-    def __init__(self, in_channels=3, out_channels=1):
-        super(AttentionUNetPlusPlus, self).__init__()
-
-        filters = [64, 128, 256, 512]
-
-        self.pool = nn.MaxPool2d(2, 2)
+    def __init__(self):
+        super().__init__()
 
         # Encoder
-        self.conv0_0 = ConvBlock(in_channels, filters[0])
-        self.conv1_0 = ConvBlock(filters[0], filters[1])
-        self.conv2_0 = ConvBlock(filters[1], filters[2])
-        self.conv3_0 = ConvBlock(filters[2], filters[3])
+        self.enc1 = DoubleConv(1, 64)
+        self.pool1 = nn.MaxPool2d(2)
 
-        # Decoder (Nested)
-        self.conv0_1 = ConvBlock(filters[0] + filters[1], filters[0])
-        self.conv1_1 = ConvBlock(filters[1] + filters[2], filters[1])
-        self.conv2_1 = ConvBlock(filters[2] + filters[3], filters[2])
+        self.enc2 = DoubleConv(64, 128)
+        self.pool2 = nn.MaxPool2d(2)
 
-        self.conv0_2 = ConvBlock(filters[0]*2 + filters[1], filters[0])
-        self.conv1_2 = ConvBlock(filters[1]*2 + filters[2], filters[1])
+        self.enc3 = DoubleConv(128, 256)
 
-        self.conv0_3 = ConvBlock(filters[0]*3 + filters[1], filters[0])
+        # Decoder (Nested Connections)
+        self.up2_1 = nn.ConvTranspose2d(256, 128, 2, stride=2)
+        self.att2_1 = AttentionGate(128, 128, 64)
+        self.dec2_1 = DoubleConv(256, 128)
 
-        # Attention Gates
-        self.att1 = AttentionBlock(filters[1], filters[0], filters[0]//2)
-        self.att2 = AttentionBlock(filters[2], filters[1], filters[1]//2)
-        self.att3 = AttentionBlock(filters[3], filters[2], filters[2]//2)
+        self.up1_1 = nn.ConvTranspose2d(128, 64, 2, stride=2)
+        self.att1_1 = AttentionGate(64, 64, 32)
+        self.dec1_1 = DoubleConv(128, 64)
 
-        # Final output
-        self.final = nn.Conv2d(filters[0], out_channels, kernel_size=1)
+        # Nested layer
+        self.up1_2 = nn.ConvTranspose2d(128, 64, 2, stride=2)
+        self.att1_2 = AttentionGate(64, 64, 32)
+        self.dec1_2 = DoubleConv(192, 64)
 
+        self.out = nn.Conv2d(64, 1, kernel_size=1)
 
     def forward(self, x):
 
         # Encoder
-        x0_0 = self.conv0_0(x)
-        x1_0 = self.conv1_0(self.pool(x0_0))
-        x2_0 = self.conv2_0(self.pool(x1_0))
-        x3_0 = self.conv3_0(self.pool(x2_0))
+        x1_0 = self.enc1(x)
+        x2_0 = self.enc2(self.pool1(x1_0))
+        x3_0 = self.enc3(self.pool2(x2_0))
 
-        # Attention + Decoder Level 1
-        x2_0_att = self.att3(x3_0, x2_0)
-        x2_1 = self.conv2_1(torch.cat([x2_0_att, F.interpolate(x3_0, scale_factor=2)], 1))
+        # First decoder stage
+        x2_1_up = self.up2_1(x3_0)
+        x2_0_att = self.att2_1(x2_1_up, x2_0)
+        x2_1 = self.dec2_1(torch.cat([x2_1_up, x2_0_att], dim=1))
 
-        x1_0_att = self.att2(x2_0, x1_0)
-        x1_1 = self.conv1_1(torch.cat([x1_0_att, F.interpolate(x2_0, scale_factor=2)], 1))
+        x1_1_up = self.up1_1(x2_1)
+        x1_0_att = self.att1_1(x1_1_up, x1_0)
+        x1_1 = self.dec1_1(torch.cat([x1_1_up, x1_0_att], dim=1))
 
-        x0_0_att = self.att1(x1_0, x0_0)
-        x0_1 = self.conv0_1(torch.cat([x0_0_att, F.interpolate(x1_0, scale_factor=2)], 1))
+        # Nested connection
+        x1_2_up = self.up1_2(x2_1)
+        x1_0_att2 = self.att1_2(x1_2_up, x1_0)
+        x1_2 = self.dec1_2(torch.cat([x1_2_up, x1_1, x1_0_att2], dim=1))
 
-        # Decoder Level 2
-        x1_2 = self.conv1_2(torch.cat([
-            x1_0, x1_1, F.interpolate(x2_1, scale_factor=2)
-        ], 1))
+        return self.out(x1_2)
 
-        x0_2 = self.conv0_2(torch.cat([
-            x0_0, x0_1, F.interpolate(x1_1, scale_factor=2)
-        ], 1))
 
-        # Decoder Level 3
-        x0_3 = self.conv0_3(torch.cat([
-            x0_0, x0_1, x0_2, F.interpolate(x1_2, scale_factor=2)
-        ], 1))
+# -----------------------------
+# Shape Verification
+# -----------------------------
+if __name__ == "__main__":
+    model = AttentionUNetPlusPlus()
+    x = torch.randn(1, 1, 256, 256)
+    y = model(x)
 
-        output = self.final(x0_3)
-
-        return output
+    print("Input shape :", x.shape)
+    print("Output shape:", y.shape)
